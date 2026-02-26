@@ -1,0 +1,5 @@
+/__pycache__
+/.claude
+/.codex
+/anime_face_detector/onnx_models
+/openspec
