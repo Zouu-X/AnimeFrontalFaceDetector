@@ -1,6 +1,6 @@
 # Face Wash Pipeline
 
-Batch filter for anime face images — keeps only **frontal faces** by measuring left/right eye-to-nose distance symmetry using the existing ONNX landmark detector (YOLOv3 + HRNetv2, 28 keypoints).
+Batch filter for anime face images — keeps only **frontal faces** by measuring bilateral landmark symmetry across multiple facial regions using the existing ONNX landmark detector (YOLOv3 + HRNetv2, 28 keypoints).
 
 ## Databricks Setup
 
@@ -75,30 +75,42 @@ python -m landmark_detect.face_wash \
 
 ## How It Works
 
-For each image the detector returns 28 keypoints. The frontal classifier computes:
+For each image the detector returns 28 keypoints. The frontal classifier computes bilateral symmetry ratios from **5 landmark pairs**, each measuring the distance from a left-side and right-side landmark to the nose tip:
+
+| Pair | Left | Right |
+|---|---|---|
+| Eye centers | mean(keypoints[11:17]) | mean(keypoints[17:23]) |
+| Eyebrow centers | mean(keypoints[5:8]) | mean(keypoints[8:11]) |
+| Mouth corners | keypoints[24] | keypoints[26] |
+| Outer contour | keypoints[0] | keypoints[4] |
+| Inner contour | keypoints[1] | keypoints[3] |
+
+For each pair: `ratio_i = min(d_left, d_right) / max(d_left, d_right)`.
+
+The final score is the **median** of all valid ratios:
 
 ```
-left_eye_center  = mean(keypoints[11:17])   # 6 boundary points
-right_eye_center = mean(keypoints[17:23])   # 6 boundary points
-nose             = keypoints[23]            # nose tip
-
-ratio = min(d_left, d_right) / max(d_left, d_right)
+ratio = median(ratio_1, ratio_2, ..., ratio_5)
 is_frontal = ratio >= threshold  (default 0.70)
 ```
 
-A perfectly symmetric face gives ratio=1.0. Profile views have one eye much closer to the nose, dropping the ratio well below 0.7.
+A perfectly symmetric face gives ratio=1.0. Profile views pull one side closer to the nose, dropping the median well below 0.7. Using the median of 5 pairs makes the classifier robust to any single noisy keypoint.
+
+Before computing symmetry, two early-exit gates reject degenerate detections:
+- **Confidence gate** — rejects faces where eye/nose keypoint confidence is too low.
+- **Eye span gate** — rejects faces where one eye region collapses (likely partial/occluded).
 
 ## Landmark Map
 
-| Region | Indices |
-|---|---|
-| Face contour | 0–4 |
-| Left eyebrow | 5–7 |
-| Right eyebrow | 8–10 |
-| Left eye | 11–16 |
-| Right eye | 17–22 |
-| Nose tip | 23 |
-| Mouth | 24–27 |
+| Region | Indices | Bilateral pairs |
+|---|---|---|
+| Face contour | 0–4 | (0, 4) outer jaw, (1, 3) inner jaw |
+| Left eyebrow | 5–7 | center vs right eyebrow center |
+| Right eyebrow | 8–10 | center vs left eyebrow center |
+| Left eye | 11–16 | center vs right eye center |
+| Right eye | 17–22 | center vs left eye center |
+| Nose tip | 23 | reference point |
+| Mouth | 24–27 | (24, 26) left vs right corner |
 
 ## CLI Options
 
@@ -107,9 +119,11 @@ A perfectly symmetric face gives ratio=1.0. Profile views have one eye much clos
 | `--image-folder` | *(required)* | Input image directory |
 | `--output-dir` | *(required)* | Output directory for frontal images |
 | `--device` | `cuda` | Inference device (`cuda` or `cpu`) |
-| `--frontal-threshold` | `0.70` | Min eye-nose distance ratio to be frontal |
+| `--frontal-threshold` | `0.70` | Min bilateral symmetry ratio (median of 5 pairs) to be frontal |
 | `--face-threshold` | `0.5` | Min face detection score |
 | `--kpt-confidence` | `0.3` | Min avg keypoint confidence for eyes/nose |
+| `--eye-confidence` | `0.35` | Min per-eye avg keypoint confidence |
+| `--eye-span-ratio-threshold` | `0.55` | Min ratio of smaller/larger eye span to reject partial eye |
 | `--visualize N` | `0` | Save annotated images for first N files |
 | `--viz-dir` | `output_dir/_viz` | Directory for visualization output |
 

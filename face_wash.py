@@ -27,6 +27,11 @@ from anime_face_detector import create_detector
 LEFT_EYE_INDICES = range(11, 17)
 RIGHT_EYE_INDICES = range(17, 23)
 NOSE_TIP_INDEX = 23
+LEFT_EYEBROW_INDICES = range(5, 8)
+RIGHT_EYEBROW_INDICES = range(8, 11)
+MOUTH_LEFT_INDEX = 24
+MOUTH_RIGHT_INDEX = 26
+CONTOUR_PAIRS = [(0, 4), (1, 3)]  # bilateral jaw pairs
 
 # ── Default thresholds ──────────────────────────────────────────────────────
 DEFAULT_FRONTAL_THRESHOLD = 0.70
@@ -75,10 +80,6 @@ def classify_frontal(
     if left_eye_conf < eye_confidence or right_eye_conf < eye_confidence:
         return False, -1.0
 
-    left_eye_center = left_eye_kpts[:, :2].mean(axis=0)
-    right_eye_center = right_eye_kpts[:, :2].mean(axis=0)
-    nose = nose_kpt[:2]
-
     # Reject likely partial-eye/occluded-eye predictions: one eye region collapses.
     left_eye_span = left_eye_kpts[:, :2].max(axis=0) - left_eye_kpts[:, :2].min(axis=0)
     right_eye_span = right_eye_kpts[:, :2].max(axis=0) - right_eye_kpts[:, :2].min(axis=0)
@@ -90,15 +91,48 @@ def classify_frontal(
     if eye_size_ratio < eye_span_ratio_threshold:
         return False, -2.0
 
-    d_left = np.linalg.norm(left_eye_center - nose)
-    d_right = np.linalg.norm(right_eye_center - nose)
+    # Compute bilateral symmetry ratios across all available pairs.
+    nose = nose_kpt[:2]
+    pairs = []
 
-    if max(d_left, d_right) < 1e-6:
+    # Eye centers to nose (existing logic, now one of many)
+    left_eye_center = left_eye_kpts[:, :2].mean(axis=0)
+    right_eye_center = right_eye_kpts[:, :2].mean(axis=0)
+    pairs.append((np.linalg.norm(left_eye_center - nose),
+                  np.linalg.norm(right_eye_center - nose)))
+
+    # Eyebrow centers to nose
+    left_brow = keypoints[list(LEFT_EYEBROW_INDICES), :2].mean(axis=0)
+    right_brow = keypoints[list(RIGHT_EYEBROW_INDICES), :2].mean(axis=0)
+    pairs.append((np.linalg.norm(left_brow - nose),
+                  np.linalg.norm(right_brow - nose)))
+
+    # Mouth corners to nose
+    mouth_left = keypoints[MOUTH_LEFT_INDEX, :2]
+    mouth_right = keypoints[MOUTH_RIGHT_INDEX, :2]
+    pairs.append((np.linalg.norm(mouth_left - nose),
+                  np.linalg.norm(mouth_right - nose)))
+
+    # Contour pairs to nose
+    for li, ri in CONTOUR_PAIRS:
+        dl = np.linalg.norm(keypoints[li, :2] - nose)
+        dr = np.linalg.norm(keypoints[ri, :2] - nose)
+        pairs.append((dl, dr))
+
+    # Compute per-pair ratios, skip degenerate pairs
+    ratios = []
+    for dl, dr in pairs:
+        dmax = max(dl, dr)
+        if dmax < 1e-6:
+            continue
+        ratios.append(min(dl, dr) / dmax)
+
+    if not ratios:
         return False, 0.0
 
-    ratio = min(d_left, d_right) / max(d_left, d_right)
+    ratio = float(np.median(ratios))
     is_frontal = ratio >= threshold
-    return is_frontal, float(ratio)
+    return is_frontal, ratio
 
 
 # ── Landmark region colors (BGR) ────────────────────────────────────────────
