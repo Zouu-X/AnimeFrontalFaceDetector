@@ -200,13 +200,33 @@ class LandmarkDetectorONNX:
         if not landmark_onnx_path.exists():
             raise FileNotFoundError(f"Landmark ONNX 不存在: {landmark_onnx_path}")
 
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if "cuda" in device.lower() else ["CPUExecutionProvider"]
+        if "cuda" in device.lower():
+            device_id = int(device.split(":")[-1]) if ":" in device else 0
+            cuda_opts = {
+                "device_id": device_id,
+                "arena_extend_strategy": "kNextPowerOfTwo",
+                "cudnn_conv_algo_search": "HEURISTIC",
+                "do_copy_in_default_stream": True,
+            }
+            providers = [("CUDAExecutionProvider", cuda_opts), "CPUExecutionProvider"]
+        else:
+            providers = ["CPUExecutionProvider"]
         self.face_sess = ort.InferenceSession(
             str(face_onnx_path), providers=providers
         )
         self.landmark_sess = ort.InferenceSession(
             str(landmark_onnx_path), providers=providers
         )
+        if "cuda" in device.lower():
+            active = self.face_sess.get_providers()
+            if "CUDAExecutionProvider" not in active:
+                import warnings
+                warnings.warn(
+                    f"CUDAExecutionProvider not active (got {active}). "
+                    "Check onnxruntime-gpu install and CUDA version. Running on CPU.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
         if not self.face_sess.get_inputs():
             raise RuntimeError(f"Face ONNX 输入为空，可能导出失败或文件损坏: {face_onnx_path}")
         if not self.landmark_sess.get_inputs():
