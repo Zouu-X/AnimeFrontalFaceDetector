@@ -10,6 +10,7 @@ Usage (from project root):
   python -m landmark_detect.face_wash --image-folder /path/to/images --output-dir /path/to/output --visualize 50
 """
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -222,6 +223,7 @@ def run(
     eye_span_ratio_threshold: float = DEFAULT_EYE_SPAN_RATIO_THRESHOLD,
     visualize: int = 0,
     viz_dir: str | Path | None = None,
+    manifest_path: str | Path | None = None,
 ) -> dict:
     """
     Filter anime face images, keeping only frontal faces.
@@ -237,6 +239,11 @@ def run(
         viz_dir = output_dir / '_viz'
     else:
         viz_dir = Path(viz_dir)
+    if manifest_path is None:
+        manifest_path = output_dir / 'clean_manifest.jsonl'
+    else:
+        manifest_path = Path(manifest_path)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Discover images
     image_paths = sorted(
@@ -274,24 +281,41 @@ def run(
     # Suppress stdout (detector prints), keep stderr for tqdm
     _stdout, _stderr = sys.stdout, sys.stderr
     sys.stdout = open(os.devnull, 'w')
+    manifest_file = manifest_path.open('w', encoding='utf-8')
     try:
         pbar = tqdm(image_paths, desc='face_wash', unit='img', file=_stderr)
         for path in pbar:
+            sample_id = path.stem
             img = cv2.imread(str(path))
             if img is None:
                 stats['no_face'] += 1
+                manifest_file.write(json.dumps({
+                    'sample_id': sample_id,
+                    'status': 'failed',
+                    'ratio': None,
+                }) + '\n')
                 pbar.set_postfix(f=stats['frontal'], p=stats['profile'])
                 continue
 
             preds = detector(img)
             if not preds:
                 stats['no_face'] += 1
+                manifest_file.write(json.dumps({
+                    'sample_id': sample_id,
+                    'status': 'failed',
+                    'ratio': None,
+                }) + '\n')
                 pbar.set_postfix(f=stats['frontal'], p=stats['profile'])
                 continue
 
             best = preds[0]
             if best['bbox'].size >= 5 and best['bbox'][4] < face_score_threshold:
                 stats['low_score'] += 1
+                manifest_file.write(json.dumps({
+                    'sample_id': sample_id,
+                    'status': 'failed',
+                    'ratio': None,
+                }) + '\n')
                 pbar.set_postfix(f=stats['frontal'], p=stats['profile'])
                 continue
 
@@ -306,10 +330,20 @@ def run(
 
             if ratio == -1.0:
                 stats['low_confidence'] += 1
+                manifest_file.write(json.dumps({
+                    'sample_id': sample_id,
+                    'status': 'failed',
+                    'ratio': ratio,
+                }) + '\n')
                 pbar.set_postfix(f=stats['frontal'], p=stats['profile'])
                 continue
             if ratio == -2.0:
                 stats['partial_eye'] += 1
+                manifest_file.write(json.dumps({
+                    'sample_id': sample_id,
+                    'status': 'failed',
+                    'ratio': ratio,
+                }) + '\n')
                 pbar.set_postfix(f=stats['frontal'], p=stats['profile'])
                 continue
 
@@ -321,8 +355,18 @@ def run(
             if is_frontal:
                 stats['frontal'] += 1
                 shutil.copy2(str(path), str(output_dir / path.name))
+                manifest_file.write(json.dumps({
+                    'sample_id': sample_id,
+                    'status': 'passed',
+                    'ratio': ratio,
+                }) + '\n')
             else:
                 stats['profile'] += 1
+                manifest_file.write(json.dumps({
+                    'sample_id': sample_id,
+                    'status': 'failed',
+                    'ratio': ratio,
+                }) + '\n')
 
             pbar.set_postfix(f=stats['frontal'], p=stats['profile'])
     except KeyboardInterrupt:
@@ -331,8 +375,10 @@ def run(
         _print_stats(stats)
         sys.exit(130)
     finally:
+        manifest_file.close()
         sys.stdout = _stdout
 
+    stats['manifest_path'] = str(manifest_path)
     return stats
 
 
@@ -370,6 +416,8 @@ def main():
                         help='Save annotated landmark images for first N files (for calibration)')
     parser.add_argument('--viz-dir', type=str, default=None,
                         help='Directory for visualization output (default: output_dir/_viz)')
+    parser.add_argument('--manifest-path', type=str, default=None,
+                        help='Path to clean_manifest.jsonl (default: output_dir/clean_manifest.jsonl)')
     args = parser.parse_args()
 
     stats = run(
@@ -383,6 +431,7 @@ def main():
         eye_span_ratio_threshold=args.eye_span_ratio_threshold,
         visualize=args.visualize,
         viz_dir=args.viz_dir,
+        manifest_path=args.manifest_path,
     )
     _print_stats(stats)
 
