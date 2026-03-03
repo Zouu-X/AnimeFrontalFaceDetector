@@ -46,6 +46,16 @@ Then run:
   --device cuda
 ```
 
+If your ONNX files are stored outside the package default `onnx_models/`, pass the custom folder:
+
+```bash
+%sh cd /tmp/ani_face_detector && python -m landmark_detect.face_wash \
+  --image-folder /dbfs/path/to/images \
+  --output-dir /dbfs/path/to/frontal_output \
+  --device cuda \
+  --model-path /dbfs/path/to/onnx_models
+```
+
 ### Dependency summary
 
 | Package | Version | Notes |
@@ -71,6 +81,13 @@ python -m landmark_detect.face_wash \
   --image-folder /path/to/images \
   --output-dir /path/to/frontal_output \
   --device cuda
+
+# Use custom ONNX model directory
+python -m landmark_detect.face_wash \
+  --image-folder /path/to/images \
+  --output-dir /path/to/frontal_output \
+  --device cuda \
+  --model-path /path/to/onnx_models
 ```
 
 ## How It Works
@@ -119,6 +136,7 @@ Before computing symmetry, two early-exit gates reject degenerate detections:
 | `--image-folder` | *(required)* | Input image directory |
 | `--output-dir` | *(required)* | Output directory for frontal images |
 | `--device` | `cuda` | Inference device (`cuda` or `cpu`) |
+| `--model-path` | package `onnx_models/` | Custom ONNX model directory; expects `face_detector_yolov3.onnx` and `landmark_hrnetv2.onnx` |
 | `--frontal-threshold` | `0.70` | Min bilateral symmetry ratio (median of 5 pairs) to be frontal |
 | `--face-threshold` | `0.5` | Min face detection score |
 | `--kpt-confidence` | `0.3` | Min avg keypoint confidence for eyes/nose |

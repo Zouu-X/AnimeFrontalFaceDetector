@@ -8,6 +8,7 @@ symmetry. Frontal faces are copied to the output directory.
 Usage (from project root):
   python -m landmark_detect.face_wash --image-folder /path/to/images --output-dir /path/to/output --device cuda
   python -m landmark_detect.face_wash --image-folder /path/to/images --output-dir /path/to/output --visualize 50
+  python -m landmark_detect.face_wash --image-folder /path/to/images --output-dir /path/to/output --model-path /path/to/onnx_models
 """
 import argparse
 import json
@@ -20,7 +21,7 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
-from anime_face_detector import create_detector
+from anime_face_detector import create_detector, create_detector_onnx
 
 # ── Landmark indices (hysts/anime-face-detector, 28 keypoints) ──────────────
 # Face contour: 0-4, Left eyebrow: 5-7, Right eyebrow: 8-10
@@ -216,6 +217,7 @@ def run(
     image_folder: str | Path,
     output_dir: str | Path,
     device: str = 'cuda',
+    model_path: str | Path | None = None,
     frontal_threshold: float = DEFAULT_FRONTAL_THRESHOLD,
     face_score_threshold: float = DEFAULT_FACE_SCORE_THRESHOLD,
     kpt_confidence: float = DEFAULT_KPT_CONFIDENCE,
@@ -264,7 +266,16 @@ def run(
         return {'total': n_total, 'skipped_existing': n_already}
 
     # Init detector
-    detector = create_detector('yolov3', device=device)
+    if model_path is None:
+        detector = create_detector('yolov3', device=device)
+    else:
+        onnx_dir = Path(model_path)
+        detector = create_detector_onnx(
+            face_name='yolov3',
+            face_onnx_path=onnx_dir / 'face_detector_yolov3.onnx',
+            landmark_onnx_path=onnx_dir / 'landmark_hrnetv2.onnx',
+            device=device,
+        )
 
     stats = {
         'total': n_total,
@@ -402,6 +413,8 @@ def main():
                         help='Output directory for frontal face images')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device for inference (default: cuda)')
+    parser.add_argument('--model-path', type=str, default=None,
+                        help='Custom ONNX model directory (expects face_detector_yolov3.onnx and landmark_hrnetv2.onnx)')
     parser.add_argument('--frontal-threshold', type=float, default=DEFAULT_FRONTAL_THRESHOLD,
                         help=f'Min eye-nose distance ratio for frontal (default: {DEFAULT_FRONTAL_THRESHOLD})')
     parser.add_argument('--face-threshold', type=float, default=DEFAULT_FACE_SCORE_THRESHOLD,
@@ -424,6 +437,7 @@ def main():
         image_folder=args.image_folder,
         output_dir=args.output_dir,
         device=args.device,
+        model_path=args.model_path,
         frontal_threshold=args.frontal_threshold,
         face_score_threshold=args.face_threshold,
         kpt_confidence=args.kpt_confidence,
