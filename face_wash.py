@@ -13,9 +13,12 @@ Usage (from project root):
   python -m landmark_detect.face_wash --image-folder /path/to/images --output-dir /path/to/output --model-path /path/to/onnx_models
 """
 import argparse
+import collections
+import itertools
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
@@ -44,6 +47,29 @@ DEFAULT_EYE_CONFIDENCE = 0.35
 DEFAULT_EYE_SPAN_RATIO_THRESHOLD = 0.55
 
 IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
+
+
+def _prefetch_images(image_paths, n_workers: int = 8, prefetch: int = 32):
+    """Yield (path, img) pairs, reading images in background threads.
+
+    Uses a sliding window of futures so at most `prefetch` images are
+    in-flight at once, bounding peak memory use.
+    """
+    def _load(path):
+        return path, cv2.imread(str(path))
+
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        it = iter(image_paths)
+        window = collections.deque()
+        for path in itertools.islice(it, prefetch):
+            window.append(pool.submit(_load, path))
+        while window:
+            path, img = window.popleft().result()
+            yield path, img
+            try:
+                window.append(pool.submit(_load, next(it)))
+            except StopIteration:
+                pass
 
 
 def classify_frontal(
@@ -228,6 +254,8 @@ def run(
     visualize: int = 0,
     viz_dir: str | Path | None = None,
     manifest_path: str | Path | None = None,
+    num_readers: int = 8,
+    prefetch: int = 32,
 ) -> dict:
     """
     Classify anime face images and write a JSONL regeneration to-do list for AnimeDiffusion.
@@ -298,10 +326,10 @@ def run(
     sys.stdout = open(os.devnull, 'w')
     manifest_file = manifest_path.open('w', encoding='utf-8')
     try:
-        pbar = tqdm(image_paths, desc='face_wash', unit='img', file=_stderr)
-        for path in pbar:
+        pbar = tqdm(total=n_total, desc='face_wash', unit='img', file=_stderr)
+        for path, img in _prefetch_images(image_paths, n_workers=num_readers, prefetch=prefetch):
             sample_id = path.stem
-            img = cv2.imread(str(path))
+            pbar.update(1)
             if img is None:
                 stats['no_face'] += 1
                 manifest_file.write(json.dumps({'sample_id': sample_id, 'ratio': None}) + '\n')
@@ -407,6 +435,10 @@ def main():
                         help='Directory for visualization output (default: output_dir/_viz)')
     parser.add_argument('--manifest-path', type=str, default=None,
                         help='Path to clean_manifest.jsonl (default: output_dir/clean_manifest.jsonl)')
+    parser.add_argument('--num-readers', type=int, default=8,
+                        help='Number of background threads for image prefetch (default: 8)')
+    parser.add_argument('--prefetch', type=int, default=32,
+                        help='Sliding window size for prefetch (default: 32)')
     args = parser.parse_args()
 
     stats = run(
@@ -423,6 +455,8 @@ def main():
         visualize=args.visualize,
         viz_dir=args.viz_dir,
         manifest_path=args.manifest_path,
+        num_readers=args.num_readers,
+        prefetch=args.prefetch,
     )
     _print_stats(stats)
 

@@ -43,7 +43,9 @@ Then run:
 %sh cd /tmp/ani_face_detector && python -m landmark_detect.face_wash \
   --image-folder /dbfs/path/to/images \
   --output-dir /dbfs/path/to/frontal_output \
-  --device cuda
+  --device cuda \
+  --num-readers 8 \
+  --prefetch 32
 ```
 
 If your ONNX files are stored outside the package default `onnx_models/`, pass the custom folder:
@@ -144,6 +146,8 @@ Before computing symmetry, two early-exit gates reject degenerate detections:
 | `--eye-span-ratio-threshold` | `0.55` | Min ratio of smaller/larger eye span to reject partial eye |
 | `--visualize N` | `0` | Save annotated images for first N files |
 | `--viz-dir` | `output_dir/_viz` | Directory for visualization output |
+| `--num-readers` | `8` | Background threads for image prefetch (DBFS I/O parallelism) |
+| `--prefetch` | `32` | Sliding-window depth; ~96 MB of decoded images in-flight |
 
 ## Resumability
 
@@ -154,6 +158,21 @@ The pipeline skips images whose filename already exists in `--output-dir`, so yo
 - ~26 ms/image on A10G GPU (YOLOv3 + HRNetv2 + classify + copy)
 - 100K images in ~50–60 min
 - ~500 MB VRAM (single worker, no multiprocessing needed)
+
+### I/O pipelining (prefetch thread pool)
+
+On DBFS (cloud object storage), `cv2.imread` incurs high network latency per image. Without prefetching, the GPU sits idle between images while the main thread waits for the next read to complete.
+
+The pipeline uses a background `ThreadPoolExecutor` to read and decode images ahead of the GPU, keeping a sliding window of `--prefetch` futures in-flight at all times:
+
+```
+Threads 1–8:  [DBFS read + PNG decode] ──► prefetch queue (32 deep)
+Main thread:                                      ▼ [GPU: YOLOv3] → [GPU: HRNetv2] → repeat
+```
+
+**Tuning:**
+- `--num-readers` — match to available CPU cores (A10G nodes typically have 8–16). More threads hide DBFS latency better; diminishing returns above ~16 where PNG decode becomes the CPU bottleneck.
+- `--prefetch 32` — ~96 MB decoded in-flight (32 × 1024×1024×3 bytes). Increase to 64 if readers still can't keep up; decrease if memory is tight.
 
 ## Recommended Workflow
 
