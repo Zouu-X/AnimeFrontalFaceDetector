@@ -17,6 +17,7 @@ def create_detector(
     landmark_model_name: str = "hrnetv2",
     device: str = "cpu",
     box_scale_factor: float = 1.1,
+    require_cuda: bool = False,
 ) -> LandmarkDetectorONNX:
     """
     在线服务仅使用 ONNX 推理，默认要求 onnx_models/ 下已放置导出的模型。
@@ -30,4 +31,5 @@ def create_detector(
         landmark_onnx_path=landmark_onnx,
         device=device,
         box_scale_factor=box_scale_factor,
+        require_cuda=require_cuda,
     )

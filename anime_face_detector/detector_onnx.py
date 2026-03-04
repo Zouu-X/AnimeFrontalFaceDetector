@@ -190,6 +190,7 @@ class LandmarkDetectorONNX:
         landmark_onnx_path: Union[str, pathlib.Path],
         device: str = "cpu",
         box_scale_factor: float = 1.1,
+        require_cuda: bool = False,
     ):
         if ort is None:
             raise ImportError("请安装 onnxruntime: pip install onnxruntime 或 onnxruntime-gpu")
@@ -218,15 +219,22 @@ class LandmarkDetectorONNX:
             str(landmark_onnx_path), providers=providers
         )
         if "cuda" in device.lower():
-            active = self.face_sess.get_providers()
-            if "CUDAExecutionProvider" not in active:
+            active_face = self.face_sess.get_providers()
+            active_landmark = self.landmark_sess.get_providers()
+            cuda_active = (
+                "CUDAExecutionProvider" in active_face
+                and "CUDAExecutionProvider" in active_landmark
+            )
+            if not cuda_active:
                 import warnings
-                warnings.warn(
-                    f"CUDAExecutionProvider not active (got {active}). "
-                    "Check onnxruntime-gpu install and CUDA version. Running on CPU.",
-                    RuntimeWarning,
-                    stacklevel=2,
+                msg = (
+                    "CUDAExecutionProvider not active for all sessions "
+                    f"(face={active_face}, landmark={active_landmark}). "
+                    "Check onnxruntime-gpu install and CUDA version. Running on CPU."
                 )
+                if require_cuda:
+                    raise RuntimeError(msg)
+                warnings.warn(msg, RuntimeWarning, stacklevel=2)
         if not self.face_sess.get_inputs():
             raise RuntimeError(f"Face ONNX 输入为空，可能导出失败或文件损坏: {face_onnx_path}")
         if not self.landmark_sess.get_inputs():
@@ -235,6 +243,14 @@ class LandmarkDetectorONNX:
         self.landmark_input_name = self.landmark_sess.get_inputs()[0].name
         self.box_scale_factor = box_scale_factor
         self.device = device
+        self.require_cuda = require_cuda
+
+    def get_runtime_info(self) -> dict:
+        return {
+            "device": self.device,
+            "face_providers": self.face_sess.get_providers(),
+            "landmark_providers": self.landmark_sess.get_providers(),
+        }
 
     @staticmethod
     def _load_image(image_or_path: Union[np.ndarray, str, pathlib.Path]) -> np.ndarray:
@@ -391,6 +407,7 @@ def create_detector_onnx(
     landmark_onnx_path: Optional[Union[str, pathlib.Path]] = None,
     device: str = "cpu",
     box_scale_factor: float = 1.1,
+    require_cuda: bool = False,
 ) -> LandmarkDetectorONNX:
     if face_onnx_path is None or landmark_onnx_path is None:
         fpath, lpath = get_onnx_paths(face_name)
@@ -401,4 +418,5 @@ def create_detector_onnx(
         landmark_onnx_path=landmark_onnx_path,
         device=device,
         box_scale_factor=box_scale_factor,
+        require_cuda=require_cuda,
     )

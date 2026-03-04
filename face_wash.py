@@ -218,6 +218,7 @@ def run(
     image_folder: str | Path,
     output_dir: str | Path,
     device: str = 'cuda',
+    require_cuda: bool = False,
     model_path: str | Path | None = None,
     frontal_threshold: float = DEFAULT_FRONTAL_THRESHOLD,
     face_score_threshold: float = DEFAULT_FACE_SCORE_THRESHOLD,
@@ -263,7 +264,7 @@ def run(
 
     # Init detector
     if model_path is None:
-        detector = create_detector('yolov3', device=device)
+        detector = create_detector('yolov3', device=device, require_cuda=require_cuda)
     else:
         onnx_dir = Path(model_path)
         detector = create_detector_onnx(
@@ -271,6 +272,14 @@ def run(
             face_onnx_path=onnx_dir / 'face_detector_yolov3.onnx',
             landmark_onnx_path=onnx_dir / 'landmark_hrnetv2.onnx',
             device=device,
+            require_cuda=require_cuda,
+        )
+    if hasattr(detector, 'get_runtime_info'):
+        info = detector.get_runtime_info()
+        print(
+            f"Detector runtime providers: face={info.get('face_providers')}, "
+            f"landmark={info.get('landmark_providers')}",
+            file=sys.stderr,
         )
 
     stats = {
@@ -378,6 +387,8 @@ def main():
                         help='Output directory for frontal face images')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device for inference (default: cuda)')
+    parser.add_argument('--require-cuda', action='store_true',
+                        help='Fail fast if CUDAExecutionProvider is not active for ONNX sessions')
     parser.add_argument('--model-path', type=str, default=None,
                         help='Custom ONNX model directory (expects face_detector_yolov3.onnx and landmark_hrnetv2.onnx)')
     parser.add_argument('--frontal-threshold', type=float, default=DEFAULT_FRONTAL_THRESHOLD,
@@ -402,6 +413,7 @@ def main():
         image_folder=args.image_folder,
         output_dir=args.output_dir,
         device=args.device,
+        require_cuda=args.require_cuda,
         model_path=args.model_path,
         frontal_threshold=args.frontal_threshold,
         face_score_threshold=args.face_threshold,

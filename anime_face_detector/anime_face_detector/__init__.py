@@ -17,6 +17,7 @@ def create_detector(
     landmark_model_name: str = "hrnetv2",
     device: str = "cpu",
     box_scale_factor: float = 1.1,
+    require_cuda: bool = False,
 ) -> LandmarkDetectorONNX:
     assert face_detector_name in ["yolov3"]
     assert landmark_model_name in ["hrnetv2"]
@@ -27,4 +28,5 @@ def create_detector(
         landmark_onnx_path=landmark_onnx,
         device=device,
         box_scale_factor=box_scale_factor,
+        require_cuda=require_cuda,
     )
