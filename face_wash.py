@@ -1,9 +1,11 @@
 """
-Batch pipeline to filter anime face images, keeping only frontal faces.
+Batch pipeline to classify anime face images and write a regeneration to-do list
+for AnimeDiffusion.
 
 Uses the existing ONNX landmark detector (YOLOv3 + HRNetv2, 28 keypoints)
 to classify frontal vs profile by comparing left/right eye-to-nose distance
-symmetry. Frontal faces are copied to the output directory.
+symmetry. Failed (non-frontal) images are written to a JSONL manifest so
+AnimeDiffusion knows which images to regenerate as frontal faces.
 
 Usage (from project root):
   python -m landmark_detect.face_wash --image-folder /path/to/images --output-dir /path/to/output --device cuda
@@ -13,7 +15,6 @@ Usage (from project root):
 import argparse
 import json
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -228,10 +229,13 @@ def run(
     manifest_path: str | Path | None = None,
 ) -> dict:
     """
-    Filter anime face images, keeping only frontal faces.
+    Classify anime face images and write a JSONL regeneration to-do list for AnimeDiffusion.
 
-    Returns dict with stats: total, skipped_existing, no_face, low_score,
-    low_confidence, partial_eye, profile, frontal.
+    Only failed (non-frontal) images are written to the manifest. Passed images are not
+    recorded. AnimeDiffusion uses sample_id to locate each file in its known source folder.
+
+    Returns dict with stats: total, no_face, low_score, low_confidence, partial_eye,
+    profile, frontal.
     """
     image_folder = Path(image_folder)
     output_dir = Path(output_dir)
@@ -255,15 +259,7 @@ def run(
         print("No images found.", file=sys.stderr)
         return {'total': 0}
 
-    # Skip already-copied for resumability
     n_total = len(image_paths)
-    image_paths = [p for p in image_paths if not (output_dir / p.name).exists()]
-    n_already = n_total - len(image_paths)
-    if n_already > 0:
-        print(f"Already copied: {n_already}, remaining: {len(image_paths)}", file=sys.stderr)
-    if not image_paths:
-        print("All images already processed, nothing to do.", file=sys.stderr)
-        return {'total': n_total, 'skipped_existing': n_already}
 
     # Init detector
     if model_path is None:
@@ -279,7 +275,6 @@ def run(
 
     stats = {
         'total': n_total,
-        'skipped_existing': n_already,
         'no_face': 0,
         'low_score': 0,
         'low_confidence': 0,
@@ -300,33 +295,21 @@ def run(
             img = cv2.imread(str(path))
             if img is None:
                 stats['no_face'] += 1
-                manifest_file.write(json.dumps({
-                    'sample_id': sample_id,
-                    'status': 'failed',
-                    'ratio': None,
-                }) + '\n')
+                manifest_file.write(json.dumps({'sample_id': sample_id, 'ratio': None}) + '\n')
                 pbar.set_postfix(f=stats['frontal'], p=stats['profile'])
                 continue
 
             preds = detector(img)
             if not preds:
                 stats['no_face'] += 1
-                manifest_file.write(json.dumps({
-                    'sample_id': sample_id,
-                    'status': 'failed',
-                    'ratio': None,
-                }) + '\n')
+                manifest_file.write(json.dumps({'sample_id': sample_id, 'ratio': None}) + '\n')
                 pbar.set_postfix(f=stats['frontal'], p=stats['profile'])
                 continue
 
             best = preds[0]
             if best['bbox'].size >= 5 and best['bbox'][4] < face_score_threshold:
                 stats['low_score'] += 1
-                manifest_file.write(json.dumps({
-                    'sample_id': sample_id,
-                    'status': 'failed',
-                    'ratio': None,
-                }) + '\n')
+                manifest_file.write(json.dumps({'sample_id': sample_id, 'ratio': None}) + '\n')
                 pbar.set_postfix(f=stats['frontal'], p=stats['profile'])
                 continue
 
@@ -341,20 +324,12 @@ def run(
 
             if ratio == -1.0:
                 stats['low_confidence'] += 1
-                manifest_file.write(json.dumps({
-                    'sample_id': sample_id,
-                    'status': 'failed',
-                    'ratio': ratio,
-                }) + '\n')
+                manifest_file.write(json.dumps({'sample_id': sample_id, 'ratio': ratio}) + '\n')
                 pbar.set_postfix(f=stats['frontal'], p=stats['profile'])
                 continue
             if ratio == -2.0:
                 stats['partial_eye'] += 1
-                manifest_file.write(json.dumps({
-                    'sample_id': sample_id,
-                    'status': 'failed',
-                    'ratio': ratio,
-                }) + '\n')
+                manifest_file.write(json.dumps({'sample_id': sample_id, 'ratio': ratio}) + '\n')
                 pbar.set_postfix(f=stats['frontal'], p=stats['profile'])
                 continue
 
@@ -365,19 +340,9 @@ def run(
 
             if is_frontal:
                 stats['frontal'] += 1
-                shutil.copy2(str(path), str(output_dir / path.name))
-                manifest_file.write(json.dumps({
-                    'sample_id': sample_id,
-                    'status': 'passed',
-                    'ratio': ratio,
-                }) + '\n')
             else:
                 stats['profile'] += 1
-                manifest_file.write(json.dumps({
-                    'sample_id': sample_id,
-                    'status': 'failed',
-                    'ratio': ratio,
-                }) + '\n')
+                manifest_file.write(json.dumps({'sample_id': sample_id, 'ratio': ratio}) + '\n')
 
             pbar.set_postfix(f=stats['frontal'], p=stats['profile'])
     except KeyboardInterrupt:
