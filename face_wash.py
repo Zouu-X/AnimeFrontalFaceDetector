@@ -256,6 +256,7 @@ def run(
     manifest_path: str | Path | None = None,
     num_readers: int = 8,
     prefetch: int = 32,
+    resume: bool = False,
 ) -> dict:
     """
     Classify anime face images and write a JSONL regeneration to-do list for AnimeDiffusion.
@@ -287,6 +288,30 @@ def run(
     if not image_paths:
         print("No images found.", file=sys.stderr)
         return {'total': 0}
+
+    if resume:
+        if not manifest_path.exists():
+            print(f"Resume: manifest not found at {manifest_path}. Aborting.", file=sys.stderr)
+            return {'total': 0}
+        failed_ids = set()
+        skipped = 0
+        with manifest_path.open('r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    sid = json.loads(line)['sample_id']
+                    failed_ids.add(sid)
+                except (json.JSONDecodeError, KeyError):
+                    skipped += 1
+        if skipped:
+            print(f"Resume: skipped {skipped} malformed manifest line(s).", file=sys.stderr)
+        image_paths = [p for p in image_paths if p.stem in failed_ids]
+        if not image_paths:
+            print("Resume: no previously-failed images found in manifest.", file=sys.stderr)
+            return {'total': 0}
+        print(f"Resume: re-processing {len(image_paths)} previously-failed images.", file=sys.stderr)
 
     n_total = len(image_paths)
 
@@ -439,6 +464,9 @@ def main():
                         help='Number of background threads for image prefetch (default: 8)')
     parser.add_argument('--prefetch', type=int, default=32,
                         help='Sliding window size for prefetch (default: 32)')
+    parser.add_argument('--resume', action='store_true',
+                        help='Re-process only images that failed the previous run '
+                             '(reads existing manifest to determine the set)')
     args = parser.parse_args()
 
     stats = run(
@@ -457,6 +485,7 @@ def main():
         manifest_path=args.manifest_path,
         num_readers=args.num_readers,
         prefetch=args.prefetch,
+        resume=args.resume,
     )
     _print_stats(stats)
 

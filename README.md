@@ -148,10 +148,36 @@ Before computing symmetry, two early-exit gates reject degenerate detections:
 | `--viz-dir` | `output_dir/_viz` | Directory for visualization output |
 | `--num-readers` | `8` | Background threads for image prefetch (DBFS I/O parallelism) |
 | `--prefetch` | `32` | Sliding-window depth; ~96 MB of decoded images in-flight |
+| `--manifest-path` | `output_dir/clean_manifest.jsonl` | Path to the JSONL manifest of failed images |
+| `--require-cuda` | off | Fail fast if CUDAExecutionProvider is not active |
+| `--resume` | off | Re-process only images that failed the previous run |
 
-## Resumability
+## Two-pass Workflow (with `--resume`)
 
-The pipeline skips images whose filename already exists in `--output-dir`, so you can safely restart after interruption.
+After the first pass, AnimeDiffusion regenerates failed images and writes them back to the same `--image-folder` under the same filenames. Use `--resume` to re-wash **only those images**, leaving already-frontal images untouched.
+
+```
+Pass 1 (initial):
+  python -m landmark_detect.face_wash \
+    --image-folder /dbfs/images \
+    --output-dir /dbfs/output \
+    --device cuda
+  → clean_manifest.jsonl: all failures recorded
+
+  AnimeDiffusion regenerates failed images → writes new PNGs back to /dbfs/images
+
+Pass 2 (resume):
+  python -m landmark_detect.face_wash \
+    --image-folder /dbfs/images \
+    --output-dir /dbfs/output \
+    --device cuda \
+    --resume
+  → reads existing manifest, processes only previously-failed IDs
+  → rewrites manifest: only images that still fail remain
+  → already-frontal images are never touched
+```
+
+**How it works:** The manifest itself is the work queue. Images recorded in it previously failed; images absent from it previously passed as frontal and are skipped entirely. The manifest is rewritten fresh on each pass — images that now pass simply disappear from it.
 
 ## Performance
 
@@ -180,3 +206,5 @@ Main thread:                                      ▼ [GPU: YOLOv3] → [GPU: HR
 2. **Adjust** — Tweak `--frontal-threshold` if too many profiles pass or too many frontals are rejected.
 3. **Run** — Full pipeline with default or tuned threshold.
 4. **Check stats** — The summary printed at the end shows frontal count, profile count, and frontal rate.
+5. **Regenerate** — Feed `clean_manifest.jsonl` to AnimeDiffusion; it regenerates failed images in-place.
+6. **Resume** — Re-run with `--resume` to re-wash only the regenerated images. Repeat steps 5–6 as needed.
